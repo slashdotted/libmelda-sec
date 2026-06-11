@@ -144,9 +144,9 @@ prefix*     matches prefixes
 Examples:
 
 ```
-^invoice@*          all invoice objects
-^invoice123@items   specific field of an object
-user_*              namespace-like grouping
+specificid          object with _id field equal to specificid
+^specificid@items♭* the items♭ array in the object with _id equal to specificid
+user_*              namespace-like grouping (all objects with _id starting with user_)
 ```
 
 ## Behavior
