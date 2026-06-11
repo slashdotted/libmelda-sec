@@ -1,4 +1,6 @@
-# melda-sec a pluggable security layer for Melda
+# melda-sec, a pluggable security layer for Melda
+
+## WARNING: This is a very early preview / alpha code! Use at your own risk!
 
 `melda-sec` is a pluggable security layer for Melda that adds cryptographic signing, signature verification, and policy-based authorization on object-level changes. It is implemented as a decorator over a standard Melda `Adapter`, allowing it to wrap any existing backend without modifying the core behavior of Melda. The purpose of `melda-sec` is to control which changes are considered valid: all data is still written and stored, but only changes that pass signature verification and policy rules are applied when the state is reconstructed. Invalid or unauthorized changes are silently ignored.
 
