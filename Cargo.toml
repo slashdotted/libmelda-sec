@@ -1,8 +1,8 @@
 [package]
 name = "melda-sec"
-version = "0.1.1"
+version = "0.1.3"
 edition = "2021"
-description = "A pluggable security layer for Melda providing signed delta verification, role-based access control and policy enforcement on object-level changes"
+description = "A pluggable security layer for Melda providing encryption, signed delta verification, role-based access control and policy enforcement on object-level changes"
 license = "GPL-3.0"
 authors = ["Amos Brocco"]
 
@@ -15,4 +15,11 @@ serde_yaml = "0.9"
 serde_json = "1"
 globset = "0.4"
 base64 = "0.21"
-melda = "0.5.2"
+melda = "0.5.4"
+aes-gcm = "0.10.3"
+sha2 = "0.11.0"
+
+[[example]]
+name = "compressed"
+path = "examples/compressed.rs"
+required-features = ["melda/brotliadapter"]

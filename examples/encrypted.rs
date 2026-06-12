@@ -1,5 +1,5 @@
 use melda::{filesystemadapter::FilesystemAdapter, melda::Melda};
-use melda_sec::{KeyStore, PolicyEngine, SecureAdapter};
+use melda_sec::{EncryptionAdapter, KeyStore, PolicyEngine, SecureAdapter};
 
 use serde_json::json;
 use std::fs;
@@ -20,11 +20,11 @@ fn gen_keys() -> (Vec<u8>, Vec<u8>) {
 fn main() {
     _ = fs::remove_dir_all("alice");
     _ = fs::remove_dir_all("bob");
-    _ = fs::remove_dir_all("joe");
 
     let (alice_sk, alice_pk) = gen_keys();
     let (bob_sk, bob_pk) = gen_keys();
-    let (joe_sk, _) = gen_keys();
+
+    let enc_key = [42u8; 32];
 
     let policy_yaml = r#"
 rules:
@@ -51,7 +51,8 @@ rules:
     let policy_alice = PolicyEngine::from_yaml(policy_yaml).unwrap();
 
     let base_alice = FilesystemAdapter::new("alice").unwrap();
-    let secure_alice = SecureAdapter::new(base_alice, ks_alice, policy_alice).into_dyn();
+    let enc_alice = EncryptionAdapter::new(base_alice, enc_key);
+    let secure_alice = SecureAdapter::new(enc_alice, ks_alice, policy_alice).into_dyn();
 
     let mut melda_alice = Melda::new(secure_alice).unwrap();
 
@@ -91,7 +92,8 @@ rules:
     let policy_bob = PolicyEngine::from_yaml(policy_yaml).unwrap();
 
     let base_bob = FilesystemAdapter::new("bob").unwrap();
-    let secure_bob = SecureAdapter::new(base_bob, ks_bob, policy_bob).into_dyn();
+    let enc_bob = EncryptionAdapter::new(base_bob, enc_key);
+    let secure_bob = SecureAdapter::new(enc_bob, ks_bob, policy_bob).into_dyn();
 
     let mut melda_bob = Melda::new(secure_bob).unwrap();
 
@@ -110,52 +112,17 @@ rules:
     melda_bob.update(v).unwrap();
     melda_bob.commit(None).unwrap();
 
-    copy_recursively("alice", "joe").unwrap();
-
-    let mut ks_joe = KeyStore::new();
-    ks_joe.set_private_key(&joe_sk).unwrap();
-
-    let policy_joe = PolicyEngine::from_yaml(
-        r#"
-rules:
-  - allow:
-      objects: "*"
-"#,
-    )
-    .unwrap();
-
-    let base_joe = FilesystemAdapter::new("joe").unwrap();
-    let secure_joe = SecureAdapter::new(base_joe, ks_joe, policy_joe).into_dyn();
-
-    let melda_joe = Melda::new(secure_joe).unwrap();
-
-    let v = json!({
-        "software":"MeldaDo",
-        "version":"1.0.0",
-        "items♭":[
-            {"_id":"joe_todo_01","title":"Hack system"}
-        ]
-    })
-    .as_object()
-    .unwrap()
-    .clone();
-
-    melda_joe.update(v).unwrap();
-    melda_joe.commit(None).unwrap();
-
     melda_alice.meld(&melda_bob).unwrap();
-    melda_alice.meld(&melda_joe).unwrap();
     melda_alice.refresh().unwrap();
 
+    let data = melda_alice.read(None).unwrap();
+    println!("{}", serde_json::to_string_pretty(&data).unwrap());
+
     melda_bob.meld(&melda_alice).unwrap();
-    melda_bob.meld(&melda_joe).unwrap();
     melda_bob.refresh().unwrap();
 
-    let data_alice = melda_alice.read(None).unwrap();
-    let data_bob = melda_bob.read(None).unwrap();
-
-    println!("{}", serde_json::to_string_pretty(&data_alice).unwrap());
-    println!("{}", serde_json::to_string_pretty(&data_bob).unwrap());
+    let data = melda_bob.read(None).unwrap();
+    println!("{}", serde_json::to_string_pretty(&data).unwrap());
 }
 
 pub fn copy_recursively(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> io::Result<()> {

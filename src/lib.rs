@@ -21,6 +21,7 @@ pub mod keystore;
 pub mod policy;
 pub mod utils;
 
+pub use adapter::EncryptionAdapter;
 pub use adapter::SecureAdapter;
 pub use keystore::KeyStore;
 pub use policy::PolicyEngine;
