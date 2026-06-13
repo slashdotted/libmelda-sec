@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::any::Any;
 use std::sync::{Arc, RwLock};
 
 use crate::keystore::KeyStore;
@@ -93,7 +94,11 @@ impl<A: Adapter> EncryptionAdapter<A> {
     }
 }
 
-impl<A: Adapter> Adapter for EncryptionAdapter<A> {
+impl<A: Adapter + 'static> Adapter for EncryptionAdapter<A> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
         let enc = self.encrypt(data)?;
         self.inner.write_object(key, &enc)
@@ -140,7 +145,7 @@ struct SignatureFile {
     sig: String,
 }
 
-impl<A: Adapter> SecureAdapter<A> {
+impl<A: Adapter + 'static> SecureAdapter<A> {
     pub fn new(inner: A, keystore: KeyStore, policy: PolicyEngine) -> Self {
         Self {
             inner,
@@ -160,9 +165,28 @@ impl<A: Adapter> SecureAdapter<A> {
         self.strict_write = value;
         self
     }
+
+    pub fn get_block_signing_key(&self, blockid: &str) -> Option<Vec<u8>> {
+        let delta = format!("{}.delta", blockid);
+
+        let data = self.inner.read_object(&delta, 0, 0).ok()?;
+        let sig_bytes = self.inner.read_object(&sig_key(&delta), 0, 0).ok()?;
+
+        let sig_file: SignatureFile = serde_json::from_slice(&sig_bytes).ok()?;
+
+        let pk = STANDARD.decode(sig_file.pubkey).ok()?;
+        let sg = STANDARD.decode(sig_file.sig).ok()?;
+        let sig = ed25519_dalek::Signature::from_slice(&sg).ok()?;
+
+        self.keystore.verify(&data, &sig).map(|_| pk)
+    }
 }
 
-impl<A: Adapter> Adapter for SecureAdapter<A> {
+impl<A: Adapter + 'static> Adapter for SecureAdapter<A> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
         if key.ends_with(".delta") && self.strict_write {
             let ids = extract_object_ids(data);
@@ -291,6 +315,10 @@ mod tests {
     }
 
     impl Adapter for SharedMemoryAdapter {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
         fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
             self.inner.read().unwrap().read_object(key, offset, length)
         }
@@ -314,6 +342,56 @@ mod tests {
 
     fn key() -> [u8; 32] {
         [7u8; 32]
+    }
+
+    #[test]
+    fn test_valid_signature() {
+        let (privk, pubk) = gen_keys();
+        let shared = SharedMemoryAdapter::new();
+
+        let mut ks_write = KeyStore::new();
+
+        let _ = ks_write.add_public_key(&pubk);
+        let _ = ks_write.set_private_key(&privk);
+
+        let (_privk2, pubk2) = gen_keys();
+        let _ = ks_write.add_public_key(&pubk2);
+
+        let secure_adapter = SecureAdapter::new(
+            shared.clone(),
+            ks_write,
+            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
+        )
+        .strict_read(false);
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter.clone()).unwrap();
+
+        let v = json!({"a":1}).as_object().unwrap().clone();
+        let _ = melda.create_object("x", v);
+        let blockid = melda.commit(None).unwrap().unwrap();
+        assert!(blockid.len() == 1);
+        let blockid = blockid.first().unwrap();
+        assert!(adapter
+            .read()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<SecureAdapter<SharedMemoryAdapter>>()
+            .unwrap()
+            .get_block_signing_key(blockid)
+            .is_some());
+        assert_eq!(
+            adapter
+                .read()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<SecureAdapter<SharedMemoryAdapter>>()
+                .unwrap()
+                .get_block_signing_key(blockid)
+                .unwrap(),
+            pubk
+        );
     }
 
     #[test]
