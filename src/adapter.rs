@@ -99,6 +99,10 @@ impl<A: Adapter + 'static> Adapter for EncryptionAdapter<A> {
         self
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
         let enc = self.encrypt(data)?;
         self.inner.write_object(key, &enc)
@@ -184,6 +188,10 @@ impl<A: Adapter + 'static> SecureAdapter<A> {
 
 impl<A: Adapter + 'static> Adapter for SecureAdapter<A> {
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
@@ -316,6 +324,10 @@ mod tests {
 
     impl Adapter for SharedMemoryAdapter {
         fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
             self
         }
 
