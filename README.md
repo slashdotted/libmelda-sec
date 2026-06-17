@@ -149,10 +149,20 @@ On read:
 
 No global consensus or automatic convergence is provided.
 
-## License
+# Publications
 
-GPL-3.0
+## 2026
+Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:TBD](https://arxiv.org/)
 
-## Author
+## 2025
+Amos Brocco "Introducing Support for Move Operations in Melda CRDT", [arXiv:2503.04811](https://arxiv.org/abs/2503.04811)
 
-Amos Brocco
+## 2022
+Amos Brocco "Melda: A General Purpose Delta State JSON CRDT". 9th Workshop on Principles and Practice of Consistency for Distributed Data (PaPoC'22). April 2022. [PDF](https://amosbrocco.ch/pubs/PaPoC_2022_Submission.pdf) [BibTex](https://amosbrocco.ch/pubs/bib/PaPoC_2022_Submission.bib)
+
+## 2021
+Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Brief announcement). 23rd International Symposium on Stabilization, Safety, and Security of Distributed Systems (SSS 2021). November 2021. [PDF](https://amosbrocco.ch/pubs/sss_2021_submission_13.pdf) [BibTex](https://amosbrocco.ch/pubs/bib/sss_2021_submission_13.bib)
+
+# License
+(c)2026 Amos Brocco,
+GPL v3 (for now... but I will evaluate a change of license - to something like BSD3/MIT/... in the near future)
