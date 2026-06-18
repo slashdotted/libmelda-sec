@@ -152,7 +152,7 @@ No global consensus or automatic convergence is provided.
 # Publications
 
 ## 2026
-Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:TBD](https://arxiv.org/)
+Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:2606.18966](https://arxiv.org/abs/2606.18966)
 
 ## 2025
 Amos Brocco "Introducing Support for Move Operations in Melda CRDT", [arXiv:2503.04811](https://arxiv.org/abs/2503.04811)
