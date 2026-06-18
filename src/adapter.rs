@@ -391,7 +391,7 @@ mod tests {
             .as_any()
             .downcast_ref::<SecureAdapter<SharedMemoryAdapter>>()
             .unwrap()
-            .get_block_signing_key(blockid)
+            .get_block_signing_key(blockid.to_string().as_str())
             .is_some());
         assert_eq!(
             adapter
@@ -400,7 +400,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<SecureAdapter<SharedMemoryAdapter>>()
                 .unwrap()
-                .get_block_signing_key(blockid)
+                .get_block_signing_key(blockid.to_string().as_str())
                 .unwrap(),
             pubk
         );
