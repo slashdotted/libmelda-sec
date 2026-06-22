@@ -626,6 +626,136 @@ mod tests {
     }
 
     #[test]
+    fn test_whitelist() {
+        let (_p1, pub1) = gen_keys();
+        let (priv2, _pub2) = gen_keys();
+
+        let shared = SharedMemoryAdapter::new();
+
+        let mut ks_joe = KeyStore::new();
+        ks_joe.set_private_key(&priv2).unwrap();
+
+        let secure_joe = SecureAdapter::new(
+            shared.clone(),
+            ks_joe,
+            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
+        );
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_joe);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter).unwrap();
+
+        let v = json!({"hack":1}).as_object().unwrap().clone();
+        let _ = melda.create_object("joe", v);
+        let deltaids = melda.commit(None).unwrap();
+
+        let mut ks_read = KeyStore::new();
+        ks_read.add_public_key(&pub1).unwrap();
+        let _ = ks_read.add_to_digest_whitelist(&deltaids.unwrap().first().unwrap().key());
+
+        let secure_read = SecureAdapter::new(
+            shared.clone(),
+            ks_read,
+            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
+        );
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_read);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter).unwrap();
+
+        let _ = melda.reload();
+
+        assert!(melda.get_all_objects().contains("joe"));
+    }
+
+    #[test]
+    fn test_trusted_key() {
+        let (_p1, pub1) = gen_keys();
+        let (priv2, pub2) = gen_keys();
+
+        let shared = SharedMemoryAdapter::new();
+
+        let mut ks_joe = KeyStore::new();
+        ks_joe.set_private_key(&priv2).unwrap();
+
+        let secure_joe = SecureAdapter::new(
+            shared.clone(),
+            ks_joe,
+            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
+        );
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_joe);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter).unwrap();
+
+        let v = json!({"hack":1}).as_object().unwrap().clone();
+        let _ = melda.create_object("joe", v);
+        melda.commit(None).unwrap();
+
+        let mut ks_read = KeyStore::new();
+        ks_read.add_public_key(&pub1).unwrap();
+        ks_read.add_public_key(&pub2).unwrap();
+
+        let secure_read = SecureAdapter::new(
+            shared.clone(),
+            ks_read,
+            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
+        );
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_read);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter).unwrap();
+
+        let _ = melda.reload();
+
+        assert!(melda.get_all_objects().contains("joe"));
+    }
+
+    #[test]
+    fn test_blacklist() {
+        let (_p1, pub1) = gen_keys();
+        let (priv2, pub2) = gen_keys();
+
+        let shared = SharedMemoryAdapter::new();
+
+        let mut ks_joe = KeyStore::new();
+        ks_joe.set_private_key(&priv2).unwrap();
+
+        let secure_joe = SecureAdapter::new(
+            shared.clone(),
+            ks_joe,
+            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
+        );
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_joe);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter).unwrap();
+
+        let v = json!({"hack":1}).as_object().unwrap().clone();
+        let _ = melda.create_object("joe", v);
+        let deltaids = melda.commit(None).unwrap();
+
+        let mut ks_read = KeyStore::new();
+        ks_read.add_public_key(&pub1).unwrap();
+        ks_read.add_public_key(&pub2).unwrap();
+        let _ = ks_read.add_to_digest_blacklist(&deltaids.unwrap().first().unwrap().key());
+
+        let secure_read = SecureAdapter::new(
+            shared.clone(),
+            ks_read,
+            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
+        );
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_read);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter).unwrap();
+
+        let _ = melda.reload();
+
+        assert!(!melda.get_all_objects().contains("joe"));
+    }
+
+    #[test]
     fn test_strict_write_blocks() {
         let (privk, pubk) = gen_keys();
 
