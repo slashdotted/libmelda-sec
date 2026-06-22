@@ -18,11 +18,13 @@
 
 use anyhow::{anyhow, Result};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct KeyStore {
     pub signing_key: Option<SigningKey>,
     trusted_keys: Vec<VerifyingKey>,
+    digest_whitelist: HashSet<String>,
+    digest_blacklist: HashSet<String>,
     roles: HashMap<Vec<u8>, String>,
 }
 
@@ -37,6 +39,8 @@ impl KeyStore {
         Self {
             signing_key: None,
             trusted_keys: vec![],
+            digest_whitelist: HashSet::new(),
+            digest_blacklist: HashSet::new(),
             roles: HashMap::new(),
         }
     }
@@ -66,6 +70,22 @@ impl KeyStore {
 
     pub fn get_role(&self, pubkey: &[u8]) -> Option<&str> {
         self.roles.get(pubkey).map(|s| s.as_str())
+    }
+
+    pub fn add_to_digest_whitelist(&mut self, digest: &str) -> Result<bool> {
+        Ok(self.digest_whitelist.insert(digest.to_owned()))
+    }
+
+    pub fn is_digest_whitelisted(&self, digest: &str) -> bool {
+        self.digest_whitelist.contains(digest)
+    }
+
+    pub fn add_to_digest_blacklist(&mut self, digest: &str) -> Result<bool> {
+        Ok(self.digest_blacklist.insert(digest.to_owned()))
+    }
+
+    pub fn is_digest_blacklisted(&self, digest: &str) -> bool {
+        self.digest_blacklist.contains(digest)
     }
 
     pub fn sign(&self, data: &[u8]) -> Option<Signature> {

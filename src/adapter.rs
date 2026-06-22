@@ -235,56 +235,69 @@ impl<A: Adapter + 'static> Adapter for SecureAdapter<A> {
     }
 
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
-        let data = self.inner.read_object(key, offset, length)?;
+        if self.keystore.is_digest_blacklisted(key) {
+            return Err(anyhow!("blacklisted_object_key"));
+        }
+
+        let data = self.inner.read_object(key, 0, 0)?;
 
         if !key.ends_with(".delta") || offset != 0 || length != 0 {
             return Ok(data);
         }
 
-        let sig_bytes = match self.inner.read_object(&sig_key(key), 0, 0) {
-            Ok(b) => b,
-            Err(_) => {
-                return if self.strict_read {
-                    Err(anyhow!("missing signature"))
-                } else {
-                    Ok(data)
-                };
-            }
-        };
+        if !self.keystore.is_digest_whitelisted(key) {
+            let sig_bytes = match self.inner.read_object(&sig_key(key), 0, 0) {
+                Ok(b) => b,
+                Err(_) => {
+                    return if self.strict_read {
+                        Err(anyhow!("missing signature"))
+                    } else {
+                        Ok(data)
+                    };
+                }
+            };
 
-        let sig_file: SignatureFile = serde_json::from_slice(&sig_bytes)?;
+            let sig_file: SignatureFile = serde_json::from_slice(&sig_bytes)?;
 
-        let _pk = STANDARD.decode(sig_file.pubkey)?;
-        let sg = STANDARD.decode(sig_file.sig)?;
+            let _pk = STANDARD.decode(sig_file.pubkey)?;
+            let sg = STANDARD.decode(sig_file.sig)?;
 
-        let sig = Signature::from_bytes(sg[..64].try_into()?);
+            let sig = Signature::from_bytes(sg[..64].try_into()?);
 
-        let verified = self.keystore.verify(&data, &sig);
+            let verified = self.keystore.verify(&data, &sig);
 
-        let pubkey = match verified {
-            Some(pk) => pk,
-            None => {
-                return if self.strict_read {
-                    Err(anyhow!("invalid signature or untrusted key"))
-                } else {
-                    Ok(Vec::new())
-                };
-            }
-        };
+            let pubkey = match verified {
+                Some(pk) => pk,
+                None => {
+                    return if self.strict_read {
+                        Err(anyhow!("invalid signature or untrusted key"))
+                    } else {
+                        Ok(Vec::new())
+                    };
+                }
+            };
 
-        let ids = extract_object_ids(&data);
+            let ids = extract_object_ids(&data);
 
-        for id in ids {
-            if !self.policy.allows(&self.keystore, &pubkey.to_bytes(), &id) {
-                return if self.strict_read {
-                    Err(anyhow!("policy violation: {}", id))
-                } else {
-                    Ok(Vec::new())
-                };
+            for id in ids {
+                if !self.policy.allows(&self.keystore, &pubkey.to_bytes(), &id) {
+                    return if self.strict_read {
+                        Err(anyhow!("policy violation: {}", id))
+                    } else {
+                        Ok(Vec::new())
+                    };
+                }
             }
         }
 
-        Ok(data)
+        if offset == 0 && length == 0 {
+            Ok(data)
+        } else {
+            if offset + length > data.len() {
+                return Err(anyhow!("invalid slice"));
+            }
+            Ok(data[offset..offset + length].to_vec())
+        }
     }
 
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
