@@ -1,170 +1,253 @@
-# melda-sec, a pluggable security layer for Melda
+# melda-sec (Trust Adapter with )
 
-## WARNING: This is a very early preview / alpha code! Use it at your own risk!
+## WARNING
 
-`melda-sec` is a pluggable security layer for [Melda](https://github.com/slashdotted/libmelda) that adds encryption, cryptographic signing, signature verification, and policy-based authorization on object-level changes. It is implemented as a decorator over a standard Melda `Adapter`, allowing it to wrap any existing backend without modifying the core behavior of Melda. The purpose of `melda-sec` is to control which changes are considered valid: all data is still written and stored, but only changes that pass signature verification and policy rules are applied when the state is reconstructed. Invalid or unauthorized changes are silently ignored.
+**This is experimental / alpha software. Use at your own risk.**
 
-## Architecture
+`melda-sec` is a pluggable trust and governance layer for https://github.com/slashdotted/libmelda.
+Rather than preventing data from being stored, `melda-sec` controls which changes are allowed to contribute to the reconstructed state of a CRDT. The library is implemented as a decorator around a standard Melda `Adapter`, making it possible to add trust management, endorsements, access control policies, encryption and compression without modifying Melda itself.
+The core idea is simple:
+> Anyone may propose a change. Only sufficiently endorsed and authorized changes contribute to the reconstructed state.
+---
 
-The library acts as a wrapper around an existing adapter:
+# Architecture
 
-```
+`melda-sec` wraps any existing Melda adapter.
+
+```text
 Melda
   ↓
-SecureAdapter
+TrustAdapter
   ↓
-Any Adapter (Memory, Filesystem, SQLite, etc.)
+Any Adapter
 ```
 
-Adapters can be composed to build pipelines (e.g. encryption, compression, security).
+Adapters can be composed:
 
-## Basic Usage
-
-```rust
-use melda::memoryadapter::MemoryAdapter;
-use melda_sec::{SecureAdapter, KeyStore, PolicyEngine};
-
-let base = MemoryAdapter::new();
-
-let mut ks = KeyStore::new();
-ks.set_private_key(&private_key_bytes)?;
-ks.add_public_key(&public_key_bytes)?;
-
-let policy = PolicyEngine::from_yaml(r#"
-rules:
-  - allow:
-      objects: "*"
-"#)?;
-
-let secure = SecureAdapter::new(base, ks, policy).into_dyn();
+```text
+Melda
+  ↓
+TrustAdapter
+  ↓
+EncryptionAdapter
+  ↓
+CompressionAdapter
+  ↓
+FilesystemAdapter
 ```
 
-Then use with Melda:
-
-```rust
-let melda = Melda::new(secure)?;
-```
-
-## Adapter Composition Examples
-
-The new adapter model allows fluent composition using `.into_dyn()`.
-
-### Secure only
-
-```rust
-let adapter = SecureAdapter::new(
-    FilesystemAdapter::new("data")?,
-    keystore,
-    policy
-).into_dyn();
-```
+The trust layer is completely independent from storage.
 
 ---
 
-### Encrypted only
+# Trust Model
 
-```rust
-let adapter = EncryptionAdapter::new(
-    FilesystemAdapter::new("data")?,
-    key
-).into_dyn();
+A change (delta) is treated as a proposal. Nodes can create endorsements for a delta. An endorsement is a cryptographically signed statement indicating that a participant accepts responsibility for that change. A delta contributes to state reconstruction only if:
+
+1. it has enough valid endorsements;
+2. the endorsers are trusted;
+3. the endorsers satisfy the configured authorization policy.
+
+This design decouples:
+
+```text
+Who created a change
 ```
+
+from
+
+```text
+Who is willing to endorse it
+```
+
+The latter determines whether a change is accepted.
 
 ---
 
-### Secure + Encrypted
+# Endorsements
 
-```rust
-let adapter = SecureAdapter::new(
-    EncryptionAdapter::new(
-        FilesystemAdapter::new("data")?,
-        key
-    ),
-    keystore,
-    policy
-).into_dyn();
+Endorsements are represented as separate objects associated with a delta.
+
+```text
+delta
+delta.<pubkey>.sig
 ```
+
+Multiple endorsements may exist for the same delta.
+
+Endorsements provide:
+
+- cryptographic accountability;
+- non-repudiation of approval;
+- decentralized validation.
+
+The system focuses on:
+
+```text
+Who approves a change
+```
+
+rather than:
+
+```text
+Who originally created it
+```
+
+Applications may still attach author information inside their data model if desired.
 
 ---
 
-### Secure + Encrypted + Compressed (Brotli)
+# Trust Configuration
 
-Note: requires `melda/brotliadapter` feature.
+A trust configuration defines:
 
-```rust
-let adapter = SecureAdapter::new(
-    BrotliAdapter::new(
-        EncryptionAdapter::new(
-            FilesystemAdapter::new("data")?,
-            key
-        ).into_dyn()
-    ),
-    keystore,
-    policy
-).into_dyn();
+- trusted public keys;
+- optional roles;
+- whitelist and blacklist entries;
+- authorization policies;
+- endorsement requirements.
+
+Typical examples:
+
+```text
+SINGLE
 ```
+
+At least one trusted endorsement is required.
+
+```text
+MAJORITY
+```
+
+A majority of trusted participants must endorse the change.
 
 ---
 
-## KeyStore
+# Policies
 
-The `KeyStore` manages the cryptographic identity of the node and the trust configuration. It holds a private key used for signing, a set of trusted public keys, and optional role assignments.
+Policies define which trusted participants are allowed to approve changes affecting specific objects.
 
-```rust
-let mut ks = KeyStore::new();
-ks.set_private_key(&private_key_bytes)?;
-ks.add_public_key(&public_key_bytes)?;
-ks.add_public_key_with_role(&public_key_bytes, "accountant")?;
+Policies may target:
+
+- specific public keys;
+- roles;
+- object identifier patterns.
+
+A delta is accepted only if a sufficient number of endorsers are authorized by the policy.
+
+---
+
+# Trust Evolution
+
+Trust is not necessarily static.
+
+A Melda CRDT can be used to store and evolve the trust configuration itself.
+
+```text
+Trust CRDT
+        ↓
+Defines trust configuration
+        ↓
+Data CRDT
 ```
 
-## Policy Engine
+This allows trusted participants to collaboratively manage:
 
-Defines which keys or roles can modify specific objects based on object identifiers.
+- trusted keys;
+- roles;
+- authorization rules;
+- endorsement policies.
 
-## Object Identifiers
+Changes to the trust configuration are themselves governed by endorsements and policies.
 
-Policies operate on identifiers generated by Melda:
+This enables decentralized trust governance without requiring a central administrator.
 
-- Plain `_id` values
-- Flattened array identifiers: `^parentid@field♭`
+---
 
-Field-level control for arbitrary object properties is not supported.
+# Bootstrapping
 
-## Behavior
+A node joining a system requires an initial trust anchor.
 
-On write:
-- data is always written
-- `.delta` objects are signed
+This may be:
 
-On read:
-- signatures are verified
-- policy rules are applied
-- invalid changes are ignored
+- a genesis trust configuration;
+- a trusted snapshot;
+- an out-of-band configuration distributed by trusted parties.
 
-## Design Properties
+Once an initial trust configuration is available, subsequent versions can be validated using the governance rules stored in the Trust CRDT itself.
 
-- Cryptographic integrity
-- Deterministic validation
+---
+
+# Design Goals
+
+- Decoupled trust management
+- Cryptographic endorsements
+- Authorization policies
+- Fine-grained post-compromise handling
 - Offline-friendly synchronization
+- Deterministic reconstruction
+- Pluggable storage backends
+- Composable adapter architecture
 
-No global consensus or automatic convergence is provided.
+`melda-sec` does **not** provide:
+
+- global consensus;
+- leader election;
+- total ordering of updates;
+- Byzantine agreement.
+
+Its goal is to filter and validate changes during reconstruction while preserving the decentralized nature of CRDTs.
+
+---
 
 # Publications
 
 ## 2026
-Amos Brocco "Decoupling Trust in Byzantine CRDTs: Fine-grained Post-Compromise Handling without Breaking Causality", [arXiv](https://arxiv.org)
 
-Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:2606.18966](https://arxiv.org/abs/2606.18966)
+Amos Brocco
+
+**Decoupling Trust in Byzantine CRDTs: Fine-grained Post-Compromise Handling without Breaking Causality**
+
+ArXiv (forthcoming)
+
+Amos Brocco
+
+**A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction**
+
+https://arxiv.org/abs/2606.18966
 
 ## 2025
-Amos Brocco "Introducing Support for Move Operations in Melda CRDT", [arXiv:2503.04811](https://arxiv.org/abs/2503.04811)
+
+Amos Brocco
+
+**Introducing Support for Move Operations in Melda CRDT**
+
+https://arxiv.org/abs/2503.04811
 
 ## 2022
-Amos Brocco "Melda: A General Purpose Delta State JSON CRDT". 9th Workshop on Principles and Practice of Consistency for Distributed Data (PaPoC'22). April 2022. [PDF](https://amosbrocco.ch/pubs/PaPoC_2022_Submission.pdf) [BibTex](https://amosbrocco.ch/pubs/bib/PaPoC_2022_Submission.bib)
+
+Amos Brocco
+
+**Melda: A General Purpose Delta State JSON CRDT**
+
+PaPoC 2022
+
+https://amosbrocco.ch/pubs/PaPoC_2022_Submission.pdf
 
 ## 2021
-Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Brief announcement). 23rd International Symposium on Stabilization, Safety, and Security of Distributed Systems (SSS 2021). November 2021. [PDF](https://amosbrocco.ch/pubs/sss_2021_submission_13.pdf) [BibTex](https://amosbrocco.ch/pubs/bib/sss_2021_submission_13.bib)
+
+Amos Brocco
+
+**Delta-State JSON CRDT: Putting Collaboration on Solid Ground**
+
+SSS 2021
+
+https://amosbrocco.ch/pubs/sss_2021_submission_13.pdf
+
+---
 
 # License
-(c)2026 Amos Brocco,
-GPL v3 (for now... but I will evaluate a change of license - to something like BSD3/MIT/... in the near future)
+
+(c) 2026 Amos Brocco
+
+GPL v3 (subject to future review).

@@ -17,6 +17,9 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use globset::GlobSet;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Serialize, Deserialize)]
 pub enum RuleEffect {
     Allow,
     Deny,
@@ -26,5 +29,6 @@ pub struct Rule {
     pub pubkey: Option<Vec<u8>>,
     pub role: Option<String>,
     pub matcher: GlobSet,
+    pub pattern: String,
     pub effect: RuleEffect,
 }
