@@ -149,6 +149,24 @@ On read:
 
 No global consensus or automatic convergence is provided.
 
+## Experimental Trust Governance Branch
+
+An experimental branch, https://github.com/slashdotted/melda-sec/tree/trust, explores endorsement-based trust governance for Melda.
+
+The prototype introduces:
+
+- endorsement-based validation of CRDT updates;
+- configurable trust policies (`SINGLE`, `MAJORITY`);
+- support for trusted roles and public keys;
+- trust evolution through a dedicated Trust CRDT;
+- decentralized governance of trust configurations.
+
+The idea is to separate data replication from trust decisions while representing both application data and trust policies as CRDT-managed state. This allows participants to collaboratively manage not only application data, but also the rules that determine which updates are accepted.
+
+See the https://github.com/slashdotted/melda-sec/tree/trust branch for details.
+
+
+
 # Publications
 
 ## 2026
