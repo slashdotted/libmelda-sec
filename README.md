@@ -1,4 +1,4 @@
-# melda-sec (Trust Adapter with )
+# melda-sec (Trust and Governance Layer for Melda)
 
 ## WARNING
 
@@ -12,33 +12,7 @@ The core idea is simple:
 
 # Architecture
 
-`melda-sec` wraps any existing Melda adapter.
-
-```text
-Melda
-  ↓
-TrustAdapter
-  ↓
-Any Adapter
-```
-
-Adapters can be composed:
-
-```text
-Melda
-  ↓
-TrustAdapter
-  ↓
-EncryptionAdapter
-  ↓
-CompressionAdapter
-  ↓
-FilesystemAdapter
-```
-
-The trust layer is completely independent from storage.
-
----
+`melda-sec` wraps any existing Melda adapter. The TrustAdapter relies on another adapter for storing data (deltas, signatures, packs).
 
 # Trust Model
 
@@ -48,21 +22,7 @@ A change (delta) is treated as a proposal. Nodes can create endorsements for a d
 2. the endorsers are trusted;
 3. the endorsers satisfy the configured authorization policy.
 
-This design decouples:
-
-```text
-Who created a change
-```
-
-from
-
-```text
-Who is willing to endorse it
-```
-
-The latter determines whether a change is accepted.
-
----
+This design decouples **who created a change** from **who is willing to endorse it**: the latter determines whether a change is accepted.
 
 # Endorsements
 
@@ -81,21 +41,8 @@ Endorsements provide:
 - non-repudiation of approval;
 - decentralized validation.
 
-The system focuses on:
-
-```text
-Who approves a change
-```
-
-rather than:
-
-```text
-Who originally created it
-```
-
+The system focuses on **who approves a change** rather than **who originally created it**.
 Applications may still attach author information inside their data model if desired.
-
----
 
 # Trust Configuration
 
@@ -121,8 +68,6 @@ MAJORITY
 
 A majority of trusted participants must endorse the change.
 
----
-
 # Policies
 
 Policies define which trusted participants are allowed to approve changes affecting specific objects.
@@ -135,34 +80,16 @@ Policies may target:
 
 A delta is accepted only if a sufficient number of endorsers are authorized by the policy.
 
----
 
 # Trust Evolution
 
-Trust is not necessarily static.
+Trust is not necessarily static. A Melda CRDT can be used to store and evolve the trust configuration itself. melda-sec supports this evolution of trust through a pair of CRDTs.
+The first CRDT, called the Trust CRDT, stores the trust configuration itself: trusted public keys, roles, authorization policies, endorsement requirements, whitelists and blacklists. Changes to this configuration are governed by the same endorsement and policy mechanisms used elsewhere in the system. As a result, trust is no longer a static property hard-coded into an application, but a shared state that can evolve over time.
+The second CRDT, called the Data CRDT, stores the application data. Rather than maintaining its own trust configuration, the Data CRDT obtains it from the current state of the Trust CRDT. This allows participants to collaboratively manage not only the data itself, but also the rules that determine which data updates are considered valid.
 
-A Melda CRDT can be used to store and evolve the trust configuration itself.
+The *Trust CRDT* manages and defines the *Trust Configuration* which governs the *Data CRDT*
 
-```text
-Trust CRDT
-        ↓
-Defines trust configuration
-        ↓
-Data CRDT
-```
-
-This allows trusted participants to collaboratively manage:
-
-- trusted keys;
-- roles;
-- authorization rules;
-- endorsement policies.
-
-Changes to the trust configuration are themselves governed by endorsements and policies.
-
-This enables decentralized trust governance without requiring a central administrator.
-
----
+This architecture provides a form of decentralized trust governance. A node bootstraps from an initial trust anchor, reconstructs the current Trust CRDT state, and then uses the resulting trust configuration to validate updates in the Data CRDT. Subsequent changes to trusted participants, roles, policies, or endorsement requirements can be performed through the Trust CRDT itself, without requiring manual reconfiguration of the participating nodes.
 
 # Bootstrapping
 
@@ -176,9 +103,8 @@ This may be:
 
 Once an initial trust configuration is available, subsequent versions can be validated using the governance rules stored in the Trust CRDT itself.
 
----
-
 # Design Goals
+This branch contains a work-in-progress. The goal is to investigate and possibly validate a solid approach providing:
 
 - Decoupled trust management
 - Cryptographic endorsements
@@ -197,8 +123,6 @@ Once an initial trust configuration is available, subsequent versions can be val
 - Byzantine agreement.
 
 Its goal is to filter and validate changes during reconstruction while preserving the decentralized nature of CRDTs.
-
----
 
 # Publications
 
