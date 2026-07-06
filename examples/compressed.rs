@@ -1,16 +1,19 @@
 // Note: run with cargo run --example compressed --features melda/brotliadapter
 
-use melda::{brotliadapter::BrotliAdapter, filesystemadapter::FilesystemAdapter, melda::Melda};
+use melda::{
+    adapter::Adapter, brotliadapter::BrotliAdapter, filesystemadapter::FilesystemAdapter,
+    melda::Melda,
+};
 
-use melda_sec::{EncryptionAdapter, KeyStore, PolicyEngine, SecureAdapter};
+use melda_sec::{EncryptionAdapter, TrustAdapter};
 
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
 use serde_json::json;
 use std::fs;
 use std::io;
 use std::path::Path;
-
-use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
+use std::sync::{Arc, RwLock};
 
 fn gen_keys() -> (Vec<u8>, Vec<u8>) {
     let sk = SigningKey::generate(&mut OsRng);
@@ -21,6 +24,8 @@ fn gen_keys() -> (Vec<u8>, Vec<u8>) {
 }
 
 fn main() {
+    type TrustCompressedFsAdapter = TrustAdapter<BrotliAdapter<Arc<RwLock<Box<dyn Adapter>>>>>;
+
     _ = fs::remove_dir_all("alice");
     _ = fs::remove_dir_all("bob");
 
@@ -42,25 +47,27 @@ rules:
       objects: "bob_*"
 "#;
 
-    let mut ks_alice = KeyStore::new();
-    ks_alice.set_private_key(&alice_sk).unwrap();
-    ks_alice
-        .add_public_key_with_role(&alice_pk, "owner")
-        .unwrap();
-    ks_alice
-        .add_public_key_with_role(&bob_pk, "editor")
-        .unwrap();
-
-    let policy_alice = PolicyEngine::from_yaml(policy_yaml).unwrap();
-
     let base_alice = FilesystemAdapter::new("alice").unwrap();
-
     let enc_alice = EncryptionAdapter::new(base_alice, enc_key).into_dyn();
     let comp_alice = BrotliAdapter::new(enc_alice);
-
-    let secure_alice = SecureAdapter::new(comp_alice, ks_alice, policy_alice).into_dyn();
-
-    let mut melda_alice = Melda::new(secure_alice).unwrap();
+    let mut secure_alice = TrustAdapter::new_single(comp_alice);
+    secure_alice
+        .get_policy_mut()
+        .parse_yaml(policy_yaml)
+        .unwrap();
+    secure_alice
+        .get_keystore_mut()
+        .set_endorsement_credentials(&alice_sk, Some(&alice_pk))
+        .unwrap();
+    secure_alice
+        .get_keystore_mut()
+        .add_trusted_public_key_with_role(&alice_pk, "owner")
+        .unwrap();
+    secure_alice
+        .get_keystore_mut()
+        .add_trusted_public_key_with_role(&bob_pk, "editor")
+        .unwrap();
+    let mut melda_alice = Melda::new(secure_alice.into_dyn()).unwrap();
 
     let v = json!({
         "software":"MeldaDo",
@@ -72,7 +79,17 @@ rules:
     .clone();
 
     melda_alice.update(v).unwrap();
-    melda_alice.commit(None).unwrap();
+    let delta_id = melda_alice.commit(None).unwrap().unwrap();
+    {
+        let adapter = melda_alice.get_adapter();
+        let adapter = adapter.read().unwrap();
+        let trust_adapter = adapter
+            .as_any()
+            .downcast_ref::<TrustCompressedFsAdapter>()
+            .unwrap();
+
+        trust_adapter.endorse(delta_id.first().unwrap()).unwrap();
+    }
 
     let v = json!({
         "software":"MeldaDo",
@@ -86,25 +103,39 @@ rules:
     .clone();
 
     melda_alice.update(v).unwrap();
-    melda_alice.commit(None).unwrap();
+    let delta_id = melda_alice.commit(None).unwrap().unwrap();
+    {
+        let adapter = melda_alice.get_adapter();
+        let adapter = adapter.read().unwrap();
+        let trust_adapter = adapter
+            .as_any()
+            .downcast_ref::<TrustCompressedFsAdapter>()
+            .unwrap();
+
+        trust_adapter.endorse(delta_id.first().unwrap()).unwrap();
+    }
 
     copy_recursively("alice", "bob").unwrap();
 
-    let mut ks_bob = KeyStore::new();
-    ks_bob.set_private_key(&bob_sk).unwrap();
-    ks_bob.add_public_key_with_role(&alice_pk, "owner").unwrap();
-    ks_bob.add_public_key_with_role(&bob_pk, "editor").unwrap();
-
-    let policy_bob = PolicyEngine::from_yaml(policy_yaml).unwrap();
-
     let base_bob = FilesystemAdapter::new("bob").unwrap();
-
     let enc_bob = EncryptionAdapter::new(base_bob, enc_key).into_dyn();
     let comp_bob = BrotliAdapter::new(enc_bob);
+    let mut secure_bob = TrustAdapter::new_single(comp_bob);
+    secure_bob.get_policy_mut().parse_yaml(policy_yaml).unwrap();
+    secure_bob
+        .get_keystore_mut()
+        .set_endorsement_credentials(&bob_sk, Some(&bob_pk))
+        .unwrap();
+    secure_bob
+        .get_keystore_mut()
+        .add_trusted_public_key_with_role(&alice_pk, "owner")
+        .unwrap();
+    secure_bob
+        .get_keystore_mut()
+        .add_trusted_public_key_with_role(&bob_pk, "editor")
+        .unwrap();
 
-    let secure_bob = SecureAdapter::new(comp_bob, ks_bob, policy_bob).into_dyn();
-
-    let mut melda_bob = Melda::new(secure_bob).unwrap();
+    let mut melda_bob = Melda::new(secure_bob.into_dyn()).unwrap();
 
     let v = json!({
         "software":"MeldaDo",
@@ -119,7 +150,17 @@ rules:
     .clone();
 
     melda_bob.update(v).unwrap();
-    melda_bob.commit(None).unwrap();
+    let delta_id = melda_bob.commit(None).unwrap().unwrap();
+    {
+        let adapter = melda_bob.get_adapter();
+        let adapter = adapter.read().unwrap();
+        let trust_adapter = adapter
+            .as_any()
+            .downcast_ref::<TrustCompressedFsAdapter>()
+            .unwrap();
+
+        trust_adapter.endorse(delta_id.first().unwrap()).unwrap();
+    }
 
     melda_alice.meld(&melda_bob).unwrap();
     melda_alice.refresh().unwrap();

@@ -22,7 +22,7 @@ pub fn sig_key(key: &str) -> String {
     format!("{}.sig", key)
 }
 
-pub fn extract_object_ids(data: &[u8]) -> Vec<String> {
+pub fn extract_created_and_modified_object_ids(data: &[u8]) -> Vec<String> {
     let mut result = Vec::new();
 
     let parsed: Value = match serde_json::from_slice(data) {
