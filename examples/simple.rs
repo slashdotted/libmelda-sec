@@ -1,5 +1,5 @@
 use melda::{filesystemadapter::FilesystemAdapter, melda::Melda};
-use melda_sec::{KeyStore, PolicyEngine, TrustAdapter};
+use melda_sec::TrustAdapter;
 
 use serde_json::json;
 use std::fs;
@@ -51,23 +51,26 @@ rules:
     // **********************************************************
     // ALICE
     // **********************************************************
-
+    let base_alice = FilesystemAdapter::new("alice").unwrap();
+    let mut secure_alice = TrustAdapter::new_single(base_alice);
+    secure_alice
+        .get_policy_mut()
+        .parse_yaml(policy_yaml)
+        .unwrap();
     // Alice trusts herself and Bob, and assigns them roles
-    let mut ks_alice = KeyStore::new();
-    ks_alice
+    secure_alice
+        .get_keystore_mut()
         .set_endorsement_credentials(&alice_sk, Some(&alice_pk))
         .unwrap();
-    ks_alice
+    secure_alice
+        .get_keystore_mut()
         .add_trusted_public_key_with_role(&alice_pk, "owner")
         .unwrap();
-    ks_alice
+    secure_alice
+        .get_keystore_mut()
         .add_trusted_public_key_with_role(&bob_pk, "editor")
         .unwrap();
-
-    let policy_alice = PolicyEngine::from_yaml(policy_yaml).unwrap();
-    let base_alice = FilesystemAdapter::new("alice").unwrap();
-    let secure_alice = TrustAdapter::new_single(base_alice, ks_alice, policy_alice).into_dyn();
-    let mut melda_alice = Melda::new(secure_alice).unwrap();
+    let mut melda_alice = Melda::new(secure_alice.into_dyn()).unwrap();
 
     let v = json!({
         "software":"MeldaDo",
@@ -125,21 +128,23 @@ rules:
 
     copy_recursively("alice", "bob").unwrap();
 
-    let mut ks_bob = KeyStore::new();
-    ks_bob
+    let base_bob = FilesystemAdapter::new("bob").unwrap();
+    let mut secure_bob = TrustAdapter::new_single(base_bob);
+    secure_bob.get_policy_mut().parse_yaml(policy_yaml).unwrap();
+    // Bob trusts himself and Bob, and assigns them roles
+    secure_bob
+        .get_keystore_mut()
         .set_endorsement_credentials(&bob_sk, Some(&bob_pk))
         .unwrap();
-    ks_bob
+    secure_bob
+        .get_keystore_mut()
         .add_trusted_public_key_with_role(&alice_pk, "owner")
         .unwrap();
-    ks_bob
+    secure_bob
+        .get_keystore_mut()
         .add_trusted_public_key_with_role(&bob_pk, "editor")
         .unwrap();
-
-    let policy_bob = PolicyEngine::from_yaml(policy_yaml).unwrap();
-    let base_bob = FilesystemAdapter::new("bob").unwrap();
-    let secure_bob = TrustAdapter::new_single(base_bob, ks_bob, policy_bob).into_dyn();
-    let mut melda_bob = Melda::new(secure_bob).unwrap();
+    let mut melda_bob = Melda::new(secure_bob.into_dyn()).unwrap();
 
     let v = json!({
         "software":"MeldaDo",
@@ -171,28 +176,22 @@ rules:
 
     copy_recursively("alice", "joe").unwrap();
 
-    let mut ks_joe = KeyStore::new();
-    ks_joe
+    let base_joe = FilesystemAdapter::new("joe").unwrap();
+    let mut secure_joe = TrustAdapter::new_single(base_joe);
+    secure_joe.get_policy_mut().allow_all();
+    // Joe trusts himself and Bob, and assigns them roles
+    secure_joe
+        .get_keystore_mut()
         .set_endorsement_credentials(&joe_sk, Some(&joe_pk))
         .unwrap();
-    ks_joe
+    secure_joe
+        .get_keystore_mut()
         .add_trusted_public_key_with_role(&alice_pk, "owner")
         .unwrap();
-    ks_joe
+    secure_joe
+        .get_keystore_mut()
         .add_trusted_public_key_with_role(&bob_pk, "editor")
         .unwrap();
-
-    let policy_joe = PolicyEngine::from_yaml(
-        r#"
-rules:
-  - allow:
-      objects: "*"
-"#,
-    )
-    .unwrap();
-
-    let base_joe = FilesystemAdapter::new("joe").unwrap();
-    let secure_joe = TrustAdapter::new_single(base_joe, ks_joe, policy_joe);
     let melda_joe = Melda::new(secure_joe.into_dyn()).unwrap();
 
     let v = json!({

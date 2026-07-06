@@ -16,11 +16,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+pub mod deltafilter;
 pub mod encryptionadapter;
 pub mod keystore;
 pub mod policy;
 pub mod trustadapter;
 pub mod utils;
+pub use deltafilter::DeltaFilter;
 pub use encryptionadapter::EncryptionAdapter;
 pub use keystore::KeyStore;
 pub use policy::PolicyEngine;

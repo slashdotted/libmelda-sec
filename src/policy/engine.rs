@@ -49,6 +49,7 @@ struct PolicyEngineConfig {
 /// blocks access, otherwise the first matching `Allow` grants it.
 pub struct PolicyEngine {
     pub rules: Vec<Rule>,
+    strict_write: bool,
 }
 
 impl Default for PolicyEngine {
@@ -59,7 +60,18 @@ impl Default for PolicyEngine {
 
 impl PolicyEngine {
     pub fn new() -> Self {
-        Self { rules: vec![] }
+        Self {
+            rules: vec![],
+            strict_write: true,
+        }
+    }
+
+    pub fn is_strict_write(&self) -> bool {
+        self.strict_write
+    }
+
+    pub fn strict_write(&mut self, enabled: bool) {
+        self.strict_write = enabled;
     }
 
     pub fn allows(&self, ks: &KeyStore, pubkey: &[u8], object_id: &str) -> bool {

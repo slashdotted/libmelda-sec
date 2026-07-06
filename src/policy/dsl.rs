@@ -162,6 +162,25 @@ impl PolicyEngine {
         Ok(engine)
     }
 
+    pub fn parse_yaml(&mut self, yaml: &str) -> Result<()> {
+        let parsed: PolicyFile = serde_yaml::from_str(yaml)?;
+
+        for r in parsed.rules {
+            if let Some(def) = r.allow {
+                self.add_rule_from_def(def, RuleEffect::Allow)?;
+            }
+            if let Some(def) = r.deny {
+                self.add_rule_from_def(def, RuleEffect::Deny)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn allow_all(&mut self) {
+        self.parse_yaml(r#"rules: [{ allow: { objects: "*" } }]"#)
+            .unwrap();
+    }
+
     fn add_rule_from_def(&mut self, def: RuleDef, effect: RuleEffect) -> Result<()> {
         let mut builder = GlobSetBuilder::new();
         builder.add(Glob::new(&def.objects)?);

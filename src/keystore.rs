@@ -20,7 +20,6 @@ use anyhow::{anyhow, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use melda::melda::DeltaId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -29,8 +28,6 @@ use std::collections::{HashMap, HashSet};
 pub struct KeyStore {
     pub endorsement_key: Option<SigningKey>,
     trusted_keys: HashSet<VerifyingKey>,
-    deltaid_whitelist: HashSet<String>,
-    deltaid_blacklist: HashSet<String>,
     roles: HashMap<Vec<u8>, String>,
 }
 
@@ -46,8 +43,6 @@ struct KeyEntry {
 #[derive(Serialize, Deserialize)]
 struct KeyStoreConfig {
     keys: Vec<KeyEntry>,
-    deltaid_whitelist: Vec<String>,
-    deltaid_blacklist: Vec<String>,
 }
 
 impl KeyStore {
@@ -55,8 +50,6 @@ impl KeyStore {
         Self {
             endorsement_key: None,
             trusted_keys: HashSet::new(),
-            deltaid_whitelist: HashSet::new(),
-            deltaid_blacklist: HashSet::new(),
             roles: HashMap::new(),
         }
     }
@@ -83,6 +76,16 @@ impl KeyStore {
         }
         self.endorsement_key = Some(sk);
         Ok(())
+    }
+
+    pub fn set_endorsement_credentials_with_role(
+        &mut self,
+        private_key: &[u8],
+        public_key: &[u8],
+        role: &str,
+    ) -> Result<()> {
+        self.set_endorsement_credentials(private_key, Some(public_key))?;
+        self.add_trusted_public_key_with_role(public_key, role)
     }
 
     pub fn add_trusted_public_key(&mut self, bytes: &[u8]) -> Result<()> {
@@ -113,30 +116,6 @@ impl KeyStore {
 
     pub fn get_role(&self, pubkey: &[u8]) -> Option<&str> {
         self.roles.get(pubkey).map(|s| s.as_str())
-    }
-
-    pub fn add_to_delta_id_whitelist(&mut self, delta_id: &DeltaId) -> Result<bool> {
-        Ok(self.deltaid_whitelist.insert(delta_id.key()))
-    }
-
-    pub fn is_delta_id_whitelisted(&self, delta_id: &DeltaId) -> bool {
-        self.deltaid_whitelist.contains(&delta_id.key())
-    }
-
-    pub fn add_to_delta_id_blacklist(&mut self, delta_id: &DeltaId) -> Result<bool> {
-        Ok(self.deltaid_blacklist.insert(delta_id.key()))
-    }
-
-    pub fn is_delta_id_blacklisted(&self, delta_id: &DeltaId) -> bool {
-        self.deltaid_blacklist.contains(&delta_id.key())
-    }
-
-    pub fn get_whitelist(&self) -> Vec<String> {
-        self.deltaid_whitelist.iter().cloned().collect()
-    }
-
-    pub fn get_blacklist(&self) -> Vec<String> {
-        self.deltaid_blacklist.iter().cloned().collect()
     }
 
     pub fn get_trusted_public_keys(&self) -> Vec<Vec<u8>> {
@@ -183,11 +162,7 @@ impl KeyStore {
             });
         }
 
-        let config = KeyStoreConfig {
-            keys,
-            deltaid_whitelist: self.deltaid_whitelist.iter().cloned().collect(),
-            deltaid_blacklist: self.deltaid_blacklist.iter().cloned().collect(),
-        };
+        let config = KeyStoreConfig { keys };
 
         Ok(serde_json::to_value(config)?)
     }
@@ -209,15 +184,6 @@ impl KeyStore {
                 }
             }
         }
-
-        for delta_id in config.deltaid_whitelist {
-            ks.add_to_delta_id_whitelist(&DeltaId::from(&delta_id)?)?;
-        }
-
-        for delta_id in config.deltaid_blacklist {
-            ks.add_to_delta_id_blacklist(&DeltaId::from(&delta_id)?)?;
-        }
-
         Ok(ks)
     }
 }

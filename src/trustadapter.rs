@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use crate::deltafilter::DeltaFilter;
 use crate::keystore::KeyStore;
 use crate::policy::PolicyEngine;
 use crate::utils::extract_created_and_modified_object_ids;
@@ -71,15 +72,16 @@ impl EndorsementKey {
 pub struct TrustAdapter<A: Adapter> {
     inner: A,
     keystore: KeyStore,
+    delta_filter: DeltaFilter,
     policy: PolicyEngine,
     endorsement_mode: EndorsementMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EndorsementMode {
-    DISABLED,
-    SINGLE,
-    MAJORITY,
+    Permissive,
+    Single,
+    Majority,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -99,34 +101,83 @@ pub struct EndorsementFetchResult {
 struct TrustConfiguration {
     endorsement_mode: EndorsementMode,
     keystore: Value,
+    delta_filter: Value,
     policy: Value,
 }
 
 impl<A: Adapter + 'static> TrustAdapter<A> {
-    pub fn new_single(inner: A, keystore: KeyStore, policy: PolicyEngine) -> Self {
+    pub fn new_single_full(
+        inner: A,
+        keystore: KeyStore,
+        delta_filter: DeltaFilter,
+        policy: PolicyEngine,
+    ) -> Self {
         Self {
             inner,
             keystore,
+            delta_filter,
             policy,
-            endorsement_mode: EndorsementMode::SINGLE,
+            endorsement_mode: EndorsementMode::Single,
         }
     }
 
-    pub fn new_majority(inner: A, keystore: KeyStore, policy: PolicyEngine) -> Self {
+    pub fn new_majority_full(
+        inner: A,
+        keystore: KeyStore,
+        delta_filter: DeltaFilter,
+        policy: PolicyEngine,
+    ) -> Self {
         Self {
             inner,
             keystore,
+            delta_filter,
             policy,
-            endorsement_mode: EndorsementMode::MAJORITY,
+            endorsement_mode: EndorsementMode::Majority,
         }
     }
 
-    pub fn new_disabled(inner: A, keystore: KeyStore, policy: PolicyEngine) -> Self {
+    pub fn new_permissive_full(
+        inner: A,
+        keystore: KeyStore,
+        delta_filter: DeltaFilter,
+        policy: PolicyEngine,
+    ) -> Self {
         Self {
             inner,
             keystore,
+            delta_filter,
             policy,
-            endorsement_mode: EndorsementMode::DISABLED,
+            endorsement_mode: EndorsementMode::Permissive,
+        }
+    }
+
+    pub fn new_single(inner: A) -> Self {
+        Self {
+            inner,
+            keystore: KeyStore::new(),
+            delta_filter: DeltaFilter::new(),
+            policy: PolicyEngine::new(),
+            endorsement_mode: EndorsementMode::Single,
+        }
+    }
+
+    pub fn new_majority(inner: A) -> Self {
+        Self {
+            inner,
+            keystore: KeyStore::new(),
+            delta_filter: DeltaFilter::new(),
+            policy: PolicyEngine::new(),
+            endorsement_mode: EndorsementMode::Majority,
+        }
+    }
+
+    pub fn new_permissive(inner: A) -> Self {
+        Self {
+            inner,
+            keystore: KeyStore::new(),
+            delta_filter: DeltaFilter::new(),
+            policy: PolicyEngine::new(),
+            endorsement_mode: EndorsementMode::Permissive,
         }
     }
 
@@ -165,12 +216,20 @@ impl<A: Adapter + 'static> TrustAdapter<A> {
         &mut self.policy
     }
 
+    pub fn get_delta_filter(&self) -> &DeltaFilter {
+        &self.delta_filter
+    }
+
+    pub fn get_delta_filter_mut(&mut self) -> &mut DeltaFilter {
+        &mut self.delta_filter
+    }
+
     pub fn add_delta_to_whitelist(&mut self, delta_id: &DeltaId) -> Result<bool> {
-        self.keystore.add_to_delta_id_whitelist(delta_id)
+        self.delta_filter.add_to_whitelist(delta_id)
     }
 
     pub fn add_delta_to_blacklist(&mut self, delta_id: &DeltaId) -> Result<bool> {
-        self.keystore.add_to_delta_id_blacklist(delta_id)
+        self.delta_filter.add_to_blacklist(delta_id)
     }
 
     pub fn read_endorsement_record(&self, key: &EndorsementKey) -> Result<EndorsementRecord> {
@@ -265,6 +324,7 @@ impl<A: Adapter + 'static> TrustAdapter<A> {
         let config = TrustConfiguration {
             endorsement_mode: self.endorsement_mode.clone(),
             keystore: self.keystore.to_json()?,
+            delta_filter: self.delta_filter.to_json()?,
             policy: self.policy.to_json()?,
         };
         Ok(serde_json::to_value(&config)?)
@@ -275,6 +335,7 @@ impl<A: Adapter + 'static> TrustAdapter<A> {
         Ok(Self {
             inner,
             keystore: KeyStore::from_json(config.keystore)?,
+            delta_filter: DeltaFilter::from_json(config.delta_filter)?,
             policy: PolicyEngine::from_json(config.policy)?,
             endorsement_mode: config.endorsement_mode,
         })
@@ -297,10 +358,7 @@ impl<A: Adapter + 'static> Adapter for TrustAdapter<A> {
     }
 
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
-        // TODO: do not prevent write even when the policy does not allow it
-        // ... a byzantine participant would just ignore the rule
-        // and we must ensure that the written data is simply ignored by others
-        /*if key.ends_with(".delta") {
+        if self.policy.is_strict_write() && key.ends_with(".delta") {
             let ids = extract_created_and_modified_object_ids(data);
             let pubkey = self
                 .keystore
@@ -308,14 +366,10 @@ impl<A: Adapter + 'static> Adapter for TrustAdapter<A> {
                 .ok_or_else(|| anyhow!("missing endorsement public key"))?;
             for id in ids {
                 if !self.policy.allows(&self.keystore, &pubkey, &id) {
-                    return Err(anyhow!(
-                        "write denied to {:?} by policy: {}",
-                        STANDARD.encode(pubkey),
-                        id
-                    ));
+                    return Err(anyhow!("write_denied_by_policy"));
                 }
             }
-        }*/
+        }
         self.inner.write_object(key, data)
     }
 
@@ -338,13 +392,13 @@ impl<A: Adapter + 'static> Adapter for TrustAdapter<A> {
         // Decode the delta ID
         if let Ok(delta_id) = DeltaId::from(key) {
             // If the delta is blacklisted prevent reading
-            if self.keystore.is_delta_id_blacklisted(&delta_id) {
+            if self.delta_filter.is_blacklisted(&delta_id) {
                 return Err(anyhow!("blacklisted_object_key"));
             }
 
             // If the delta is whitelisted, allow reading without checking endorsements
-            if self.keystore.is_delta_id_whitelisted(&delta_id)
-                || self.endorsement_mode == EndorsementMode::DISABLED
+            if self.delta_filter.is_whitelisted(&delta_id)
+                || self.endorsement_mode == EndorsementMode::Permissive
             {
                 if offset == 0 && length == 0 {
                     return Ok(data);
@@ -361,9 +415,9 @@ impl<A: Adapter + 'static> Adapter for TrustAdapter<A> {
             let trusted_count = self.keystore.trusted_key_count();
 
             let enough = match self.endorsement_mode {
-                EndorsementMode::DISABLED => true,
-                EndorsementMode::SINGLE => !endorsements.valid.is_empty(),
-                EndorsementMode::MAJORITY => {
+                EndorsementMode::Permissive => true,
+                EndorsementMode::Single => !endorsements.valid.is_empty(),
+                EndorsementMode::Majority => {
                     if trusted_count == 0 {
                         false
                     } else {
@@ -389,9 +443,9 @@ impl<A: Adapter + 'static> Adapter for TrustAdapter<A> {
                 }
 
                 let enough = match self.endorsement_mode {
-                    EndorsementMode::DISABLED => true,
-                    EndorsementMode::SINGLE => allowed_endorsers > 0,
-                    EndorsementMode::MAJORITY => {
+                    EndorsementMode::Permissive => true,
+                    EndorsementMode::Single => allowed_endorsers > 0,
+                    EndorsementMode::Majority => {
                         if trusted_count == 0 {
                             false
                         } else {
@@ -521,20 +575,19 @@ mod tests {
     fn test_valid_signature() {
         let (privk, pubk) = gen_keys();
         let shared = SharedMemoryAdapter::new();
-
-        let mut ks_write = KeyStore::new();
-
-        let _ = ks_write.add_trusted_public_key(&pubk);
-        let _ = ks_write.set_endorsement_credentials(&privk, Some(&pubk));
-
+        let mut secure_adapter: TrustAdapter<SharedMemoryAdapter> =
+            TrustAdapter::new_single(shared.clone());
+        let _ = secure_adapter
+            .get_keystore_mut()
+            .add_trusted_public_key(&pubk);
+        let _ = secure_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&privk, Some(&pubk));
         let (_privk2, pubk2) = gen_keys();
-        let _ = ks_write.add_trusted_public_key(&pubk2);
-
-        let secure_adapter: TrustAdapter<SharedMemoryAdapter> = TrustAdapter::new_single(
-            shared.clone(),
-            ks_write,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let _ = secure_adapter
+            .get_keystore_mut()
+            .add_trusted_public_key(&pubk2);
+        secure_adapter.get_policy_mut().allow_all();
 
         let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
         let adapter = Arc::new(RwLock::new(adapter));
@@ -590,14 +643,22 @@ mod tests {
     fn test_json_serialization() {
         let (privk, pubk) = gen_keys();
         let shared = SharedMemoryAdapter::new();
+        let mut trust_adapter = TrustAdapter::new_single(shared.clone());
 
-        let mut ks = KeyStore::new();
-        ks.set_endorsement_credentials(&privk, Some(&pubk)).unwrap();
-        let _ = ks.add_to_delta_id_whitelist(&DeltaId::from("1-allowed.delta").unwrap());
-        let _ = ks.add_to_delta_id_blacklist(&DeltaId::from("1-blocked.delta").unwrap());
-
-        let mut policy = PolicyEngine::new();
-        policy
+        trust_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&privk, Some(&pubk))
+            .unwrap();
+        trust_adapter
+            .get_delta_filter_mut()
+            .add_to_whitelist(&DeltaId::from("1-allowed.delta").unwrap())
+            .unwrap();
+        trust_adapter
+            .get_delta_filter_mut()
+            .add_to_blacklist(&DeltaId::from("1-blocked.delta").unwrap())
+            .unwrap();
+        trust_adapter
+            .get_policy_mut()
             .add_rule(
                 None,
                 Some("owner".to_string()),
@@ -606,49 +667,30 @@ mod tests {
             )
             .unwrap();
 
-        let trust_adapter = TrustAdapter::new_single(shared.clone(), ks, policy);
-
         let config_value = trust_adapter.to_json().unwrap();
-
         let config_obj = config_value.as_object().unwrap();
 
         assert!(config_obj.contains_key("keystore"));
         assert!(config_obj.contains_key("policy"));
         assert!(config_obj.contains_key("endorsement_mode"));
+        assert!(config_obj.contains_key("delta_filter"));
 
         let keystore_value = &config_value["keystore"];
 
         assert_eq!(keystore_value["keys"].as_array().unwrap().len(), 1);
 
-        assert_eq!(
-            keystore_value["deltaid_whitelist"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        let deltafilter_value = &config_value["delta_filter"];
 
-        assert_eq!(
-            keystore_value["deltaid_blacklist"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(deltafilter_value["whitelist"].as_array().unwrap().len(), 1);
+
+        assert_eq!(deltafilter_value["blacklist"].as_array().unwrap().len(), 1);
 
         assert!(keystore_value.get("endorsement_key").is_none());
-
-        // Verify the exported configuration includes the policy.
         assert!(config_value.get("policy").is_some());
-
         let policy_value = &config_value["policy"];
-
         assert!(policy_value.get("rules").is_some());
 
-        // Round-trip
-
         let adapter_roundtrip = TrustAdapter::from_json(shared, config_value).unwrap();
-
         assert!(adapter_roundtrip
             .keystore
             .endorsement_public_key()
@@ -662,12 +704,12 @@ mod tests {
         );
 
         assert!(adapter_roundtrip
-            .keystore
-            .is_delta_id_whitelisted(&DeltaId::from("1-allowed.delta").unwrap()));
+            .delta_filter
+            .is_whitelisted(&DeltaId::from("1-allowed.delta").unwrap()));
 
         assert!(adapter_roundtrip
-            .keystore
-            .is_delta_id_blacklisted(&DeltaId::from("1-blocked.delta").unwrap()));
+            .delta_filter
+            .is_blacklisted(&DeltaId::from("1-blocked.delta").unwrap()));
     }
 
     #[test]
@@ -675,16 +717,16 @@ mod tests {
         let (privk, pubk) = gen_keys();
         let (privk2, pubk2) = gen_keys();
         let shared = SharedMemoryAdapter::new();
-
-        let mut ks_write = KeyStore::new();
-        let _ = ks_write.add_trusted_public_key(&pubk);
-        let _ = ks_write.set_endorsement_credentials(&privk, Some(&pubk));
-
-        let secure_adapter = TrustAdapter::new_single(
-            shared.clone(),
-            ks_write,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let mut secure_adapter = TrustAdapter::new_single(shared.clone());
+        secure_adapter.get_policy_mut().allow_all();
+        secure_adapter
+            .get_keystore_mut()
+            .add_trusted_public_key(&pubk)
+            .unwrap();
+        secure_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&privk, Some(&pubk))
+            .unwrap();
 
         let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
         let adapter = Arc::new(RwLock::new(adapter));
@@ -739,15 +781,17 @@ mod tests {
         let (privk, pubk) = gen_keys();
         let shared = SharedMemoryAdapter::new();
 
-        let mut ks_write = KeyStore::new();
-        let _ = ks_write.add_trusted_public_key(&pubk);
-        let _ = ks_write.set_endorsement_credentials(&privk, Some(&pubk));
+        let mut secure_adapter = TrustAdapter::new_single(shared.clone());
 
-        let secure_adapter = TrustAdapter::new_single(
-            shared.clone(),
-            ks_write,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        secure_adapter.get_policy_mut().allow_all();
+        secure_adapter
+            .get_keystore_mut()
+            .add_trusted_public_key(&pubk)
+            .unwrap();
+        secure_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&privk, Some(&pubk))
+            .unwrap();
 
         let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
         let adapter = Arc::new(RwLock::new(adapter));
@@ -780,14 +824,12 @@ mod tests {
         let (_priv3, pub3) = gen_keys();
         let shared = SharedMemoryAdapter::new();
 
-        let mut ks_write = KeyStore::new();
-        let _ = ks_write.set_endorsement_credentials(&priv1, Some(&pub1));
-
-        let secure_adapter = TrustAdapter::new_majority(
-            shared.clone(),
-            ks_write,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let mut secure_adapter = TrustAdapter::new_majority(shared.clone());
+        secure_adapter.get_policy_mut().allow_all();
+        secure_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&priv1, Some(&pub1))
+            .unwrap();
 
         let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
         let adapter = Arc::new(RwLock::new(adapter));
@@ -807,16 +849,20 @@ mod tests {
 
         let blockid = blockid.first().unwrap();
 
-        let mut ks_read = KeyStore::new();
-        let _ = ks_read.add_trusted_public_key(&pub1);
-        let _ = ks_read.add_trusted_public_key(&pub2);
-        let _ = ks_read.add_trusted_public_key(&pub3);
-
-        let secure_read = TrustAdapter::new_majority(
-            shared.clone(),
-            ks_read,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let mut secure_read = TrustAdapter::new_majority(shared.clone());
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
 
         let adapter_read: Box<dyn Adapter> = Box::new(secure_read);
         let adapter_read = Arc::new(RwLock::new(adapter_read));
@@ -825,14 +871,12 @@ mod tests {
         let _ = melda_read.reload();
         assert!(!melda_read.get_all_objects().contains("y"));
 
-        let mut ks_second = KeyStore::new();
-        let _ = ks_second.set_endorsement_credentials(&priv2, Some(&pub2));
-
-        let secure_second = TrustAdapter::new_majority(
-            shared.clone(),
-            ks_second,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let mut secure_second = TrustAdapter::new_majority(shared.clone());
+        secure_second.get_policy_mut().allow_all();
+        secure_second
+            .get_keystore_mut()
+            .set_endorsement_credentials(&priv2, Some(&pub2))
+            .unwrap();
 
         let adapter_second: Box<dyn Adapter> = Box::new(secure_second);
         let adapter_second = Arc::new(RwLock::new(adapter_second));
@@ -844,17 +888,23 @@ mod tests {
 
         assert!(secure_second_ref.endorse(blockid).is_ok());
 
-        let adapter_read2: Box<dyn Adapter> = Box::new(TrustAdapter::new_majority(
-            shared.clone(),
-            {
-                let mut ks = KeyStore::new();
-                let _ = ks.add_trusted_public_key(&pub1);
-                let _ = ks.add_trusted_public_key(&pub2);
-                let _ = ks.add_trusted_public_key(&pub3);
-                ks
-            },
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        ));
+        let mut secure_read2 = TrustAdapter::new_majority(shared.clone());
+        secure_read2.get_policy_mut().allow_all();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
+
+        let adapter_read2: Box<dyn Adapter> = Box::new(secure_read2);
+
         let adapter_read2 = Arc::new(RwLock::new(adapter_read2));
         let melda_read2 = Melda::new(adapter_read2.clone()).unwrap();
 
@@ -869,14 +919,12 @@ mod tests {
         let (_priv3, pub3) = gen_keys();
         let shared = SharedMemoryAdapter::new();
 
-        let mut ks_write = KeyStore::new();
-        let _ = ks_write.set_endorsement_credentials(&priv1, Some(&pub1));
-
-        let secure_adapter = TrustAdapter::new_majority(
-            shared.clone(),
-            ks_write,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let mut secure_adapter = TrustAdapter::new_majority(shared.clone());
+        secure_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&priv1, Some(&pub1))
+            .unwrap();
+        secure_adapter.get_policy_mut().allow_all();
 
         let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
         let adapter = Arc::new(RwLock::new(adapter));
@@ -887,16 +935,20 @@ mod tests {
         let blockid = melda.commit(None).unwrap().unwrap();
         let _ = blockid.first().unwrap();
 
-        let mut ks_read = KeyStore::new();
-        let _ = ks_read.add_trusted_public_key(&pub1);
-        let _ = ks_read.add_trusted_public_key(&pub2);
-        let _ = ks_read.add_trusted_public_key(&pub3);
-
-        let secure_read = TrustAdapter::new_majority(
-            shared.clone(),
-            ks_read,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let mut secure_read = TrustAdapter::new_majority(shared.clone());
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
 
         let adapter_read: Box<dyn Adapter> = Box::new(secure_read);
         let adapter_read = Arc::new(RwLock::new(adapter_read));
@@ -905,17 +957,22 @@ mod tests {
         let _ = melda_read.reload();
         assert!(!melda_read.get_all_objects().contains("y"));
 
-        let adapter_read2: Box<dyn Adapter> = Box::new(TrustAdapter::new_majority(
-            shared.clone(),
-            {
-                let mut ks = KeyStore::new();
-                let _ = ks.add_trusted_public_key(&pub1);
-                let _ = ks.add_trusted_public_key(&pub2);
-                let _ = ks.add_trusted_public_key(&pub3);
-                ks
-            },
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        ));
+        let mut secure_read2 = TrustAdapter::new_majority(shared.clone());
+        secure_read2.get_policy_mut().allow_all();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
+
+        let adapter_read2: Box<dyn Adapter> = Box::new(secure_read2);
         let adapter_read2 = Arc::new(RwLock::new(adapter_read2));
         let melda_read2 = Melda::new(adapter_read2.clone()).unwrap();
 
@@ -928,16 +985,12 @@ mod tests {
         let (privk, pubk) = gen_keys();
         let shared = SkipSigSharedMemoryAdapter::new();
 
-        let mut ks_write = KeyStore::new();
-        ks_write
+        let mut secure_write = TrustAdapter::new_single(shared.clone());
+        secure_write.get_policy_mut().allow_all();
+        secure_write
+            .get_keystore_mut()
             .set_endorsement_credentials(&privk, Some(&pubk))
             .unwrap();
-
-        let secure_write = TrustAdapter::new_single(
-            shared.clone(),
-            ks_write,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
 
         let adapter: Box<dyn Adapter> = Box::new(secure_write);
         let adapter = Arc::new(RwLock::new(adapter));
@@ -947,14 +1000,12 @@ mod tests {
         let _ = melda.create_object("x", v);
         assert!(melda.commit(None).is_ok());
 
-        let mut ks_read = KeyStore::new();
-        ks_read.add_trusted_public_key(&pubk).unwrap();
-
-        let secure_read = TrustAdapter::new_single(
-            shared.clone(),
-            ks_read,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        let mut secure_read = TrustAdapter::new_single(shared.clone());
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pubk)
+            .unwrap();
 
         let adapter: Box<dyn Adapter> = Box::new(secure_read);
         let adapter = Arc::new(RwLock::new(adapter));
@@ -971,38 +1022,27 @@ mod tests {
         let (priv2, pub2) = gen_keys();
 
         let shared = SharedMemoryAdapter::new();
-
-        let mut ks_joe = KeyStore::new();
-        ks_joe
+        let mut secure_joe = TrustAdapter::new_single(shared.clone());
+        secure_joe.get_policy_mut().allow_all();
+        secure_joe
+            .get_keystore_mut()
             .set_endorsement_credentials(&priv2, Some(&pub2))
             .unwrap();
-
-        let secure_joe = TrustAdapter::new_single(
-            shared.clone(),
-            ks_joe,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
-
-        let adapter: Box<dyn Adapter> = Box::new(secure_joe);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let melda = Melda::new(secure_joe.into_dyn()).unwrap();
 
         let v = json!({"hack":1}).as_object().unwrap().clone();
         let _ = melda.create_object("joe", v);
         melda.commit(None).unwrap();
 
-        let mut ks_read = KeyStore::new();
-        ks_read.add_trusted_public_key(&pub1).unwrap();
+        let mut secure_read = TrustAdapter::new_single(shared.clone());
 
-        let secure_read = TrustAdapter::new_single(
-            shared.clone(),
-            ks_read,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
 
-        let adapter: Box<dyn Adapter> = Box::new(secure_read);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let melda = Melda::new(secure_read.into_dyn()).unwrap();
 
         let _ = melda.reload();
 
@@ -1016,38 +1056,29 @@ mod tests {
 
         let shared = SharedMemoryAdapter::new();
 
-        let mut ks_joe = KeyStore::new();
-        ks_joe
+        let mut secure_joe = TrustAdapter::new_single(shared.clone());
+        secure_joe.get_policy_mut().allow_all();
+        secure_joe
+            .get_keystore_mut()
             .set_endorsement_credentials(&priv2, Some(&pub2))
             .unwrap();
-
-        let secure_joe = TrustAdapter::new_single(
-            shared.clone(),
-            ks_joe,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
-
-        let adapter: Box<dyn Adapter> = Box::new(secure_joe);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let melda = Melda::new(secure_joe.into_dyn()).unwrap();
 
         let v = json!({"hack":1}).as_object().unwrap().clone();
         let _ = melda.create_object("joe", v);
         let deltaids = melda.commit(None).unwrap();
 
-        let mut ks_read = KeyStore::new();
-        ks_read.add_trusted_public_key(&pub1).unwrap();
-        let _ = ks_read.add_to_delta_id_whitelist(&deltaids.unwrap().first().unwrap());
-
-        let secure_read = TrustAdapter::new_single(
-            shared.clone(),
-            ks_read,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
-
-        let adapter: Box<dyn Adapter> = Box::new(secure_read);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let mut secure_read = TrustAdapter::new_single(shared.clone());
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read
+            .get_delta_filter_mut()
+            .add_to_whitelist(&deltaids.unwrap().first().unwrap())
+            .unwrap();
+        let melda = Melda::new(secure_read.into_dyn()).unwrap();
         let _ = melda.reload();
         assert!(melda.get_all_objects().contains("joe"));
     }
@@ -1058,21 +1089,14 @@ mod tests {
         let (priv2, pub2) = gen_keys();
 
         let shared = SharedMemoryAdapter::new();
-
-        let mut ks_joe = KeyStore::new();
-        ks_joe
+        let mut secure_joe = TrustAdapter::new_single(shared.clone());
+        secure_joe.get_policy_mut().allow_all();
+        secure_joe
+            .get_keystore_mut()
             .set_endorsement_credentials(&priv2, Some(&pub2))
             .unwrap();
 
-        let secure_joe = TrustAdapter::new_single(
-            shared.clone(),
-            ks_joe,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
-
-        let adapter: Box<dyn Adapter> = Box::new(secure_joe);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let melda = Melda::new(secure_joe.into_dyn()).unwrap();
 
         let v = json!({"hack":1}).as_object().unwrap().clone();
         let _ = melda.create_object("joe", v);
@@ -1086,19 +1110,19 @@ mod tests {
             .unwrap();
         adapter.endorse(delta_id.first().unwrap()).unwrap();
 
-        let mut ks_read = KeyStore::new();
-        ks_read.add_trusted_public_key(&pub1).unwrap();
-        ks_read.add_trusted_public_key(&pub2).unwrap();
+        let mut secure_read = TrustAdapter::new_single(shared.clone());
+        secure_read.get_policy_mut().allow_all();
 
-        let secure_read = TrustAdapter::new_single(
-            shared.clone(),
-            ks_read,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
 
-        let adapter: Box<dyn Adapter> = Box::new(secure_read);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let melda = Melda::new(secure_read.into_dyn()).unwrap();
 
         let _ = melda.reload();
 
@@ -1112,42 +1136,78 @@ mod tests {
 
         let shared = SharedMemoryAdapter::new();
 
-        let mut ks_joe = KeyStore::new();
-        ks_joe
+        let mut secure_joe = TrustAdapter::new_single(shared.clone());
+        secure_joe.get_policy_mut().allow_all();
+        secure_joe
+            .get_keystore_mut()
             .set_endorsement_credentials(&priv2, Some(&pub2))
             .unwrap();
-
-        let secure_joe = TrustAdapter::new_single(
-            shared.clone(),
-            ks_joe,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
-
-        let adapter: Box<dyn Adapter> = Box::new(secure_joe);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let melda = Melda::new(secure_joe.into_dyn()).unwrap();
 
         let v = json!({"hack":1}).as_object().unwrap().clone();
         let _ = melda.create_object("joe", v);
         let deltaids = melda.commit(None).unwrap();
 
-        let mut ks_read = KeyStore::new();
-        ks_read.add_trusted_public_key(&pub1).unwrap();
-        ks_read.add_trusted_public_key(&pub2).unwrap();
-        let _ = ks_read.add_to_delta_id_blacklist(&deltaids.unwrap().first().unwrap());
-
-        let secure_read = TrustAdapter::new_single(
-            shared.clone(),
-            ks_read,
-            PolicyEngine::from_yaml(r#"rules: [{ allow: { objects: "*" } }]"#).unwrap(),
-        );
-
-        let adapter: Box<dyn Adapter> = Box::new(secure_read);
-        let adapter = Arc::new(RwLock::new(adapter));
-        let melda = Melda::new(adapter).unwrap();
+        let mut secure_read = TrustAdapter::new_single(shared.clone());
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read
+            .get_delta_filter_mut()
+            .add_to_blacklist(&deltaids.unwrap().first().unwrap())
+            .unwrap();
+        let melda = Melda::new(secure_read.into_dyn()).unwrap();
 
         let _ = melda.reload();
 
         assert!(!melda.get_all_objects().contains("joe"));
+    }
+
+    #[test]
+    fn test_strict_write() {
+        let policy_yaml = r#"
+        rules:
+        - allow:
+            role: editor
+            objects: "*"
+        "#;
+
+        let (privk, pubk) = gen_keys();
+        let shared = SkipSigSharedMemoryAdapter::new();
+
+        let mut secure_write = TrustAdapter::new_single(shared.clone());
+        secure_write
+            .get_policy_mut()
+            .parse_yaml(policy_yaml)
+            .unwrap();
+        secure_write
+            .get_keystore_mut()
+            .set_endorsement_credentials(&privk, Some(&pubk))
+            .unwrap();
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_write);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter).unwrap();
+
+        let v = json!({"a":1}).as_object().unwrap().clone();
+        let _ = melda.create_object("x", v);
+        assert!(melda.commit(None).is_err());
+        {
+            let adapter = melda.get_adapter();
+            let mut adapter = adapter.write().unwrap();
+            let trust_adapter = adapter
+                .as_any_mut()
+                .downcast_mut::<TrustAdapter<SkipSigSharedMemoryAdapter>>()
+                .unwrap();
+            trust_adapter.get_policy_mut().strict_write(false);
+        }
+
+        assert!(melda.commit(None).is_ok());
     }
 }
