@@ -228,6 +228,9 @@ Applications may require different levels of approval before accepting a delta. 
     
     A delta endorsed by only two trusted participants would not be accepted.
 
+- **Unanimous**
+  - All trusted participants must endorse the delta.
+
 ## Deterministic Reconstruction
 
 During synchronization (using **meld** or whatever dissemnation and replication mechanisms has been implemented), nodes may receive many deltas. Some of the delta object may be:
