@@ -82,6 +82,7 @@ pub enum EndorsementMode {
     Permissive,
     Single,
     Majority,
+    Unanimous,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -151,6 +152,21 @@ impl<A: Adapter + 'static> TrustAdapter<A> {
         }
     }
 
+    pub fn new_unanimous_full(
+        inner: A,
+        keystore: KeyStore,
+        delta_filter: DeltaFilter,
+        policy: PolicyEngine,
+    ) -> Self {
+        Self {
+            inner,
+            keystore,
+            delta_filter,
+            policy,
+            endorsement_mode: EndorsementMode::Unanimous,
+        }
+    }
+
     pub fn new_single(inner: A) -> Self {
         Self {
             inner,
@@ -178,6 +194,16 @@ impl<A: Adapter + 'static> TrustAdapter<A> {
             delta_filter: DeltaFilter::new(),
             policy: PolicyEngine::new(),
             endorsement_mode: EndorsementMode::Permissive,
+        }
+    }
+
+    pub fn new_unanimous(inner: A) -> Self {
+        Self {
+            inner,
+            keystore: KeyStore::new(),
+            delta_filter: DeltaFilter::new(),
+            policy: PolicyEngine::new(),
+            endorsement_mode: EndorsementMode::Unanimous,
         }
     }
 
@@ -424,6 +450,7 @@ impl<A: Adapter + 'static> Adapter for TrustAdapter<A> {
                         endorsements.valid.len() * 2 > trusted_count
                     }
                 }
+                EndorsementMode::Unanimous => endorsements.valid.len() == trusted_count,
             };
 
             if !enough {
@@ -452,6 +479,7 @@ impl<A: Adapter + 'static> Adapter for TrustAdapter<A> {
                             allowed_endorsers * 2 > trusted_count
                         }
                     }
+                    EndorsementMode::Unanimous => allowed_endorsers == trusted_count,
                 };
 
                 if !enough {
@@ -958,6 +986,186 @@ mod tests {
         assert!(!melda_read.get_all_objects().contains("y"));
 
         let mut secure_read2 = TrustAdapter::new_majority(shared.clone());
+        secure_read2.get_policy_mut().allow_all();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
+
+        let adapter_read2: Box<dyn Adapter> = Box::new(secure_read2);
+        let adapter_read2 = Arc::new(RwLock::new(adapter_read2));
+        let melda_read2 = Melda::new(adapter_read2.clone()).unwrap();
+
+        let _ = melda_read2.reload();
+        assert!(!melda_read2.get_all_objects().contains("y"));
+    }
+
+    #[test]
+    fn test_unanimous_endorsement() {
+        let (priv1, pub1) = gen_keys();
+        let (priv2, pub2) = gen_keys();
+        let (priv3, pub3) = gen_keys();
+        let shared = SharedMemoryAdapter::new();
+
+        let mut secure_adapter = TrustAdapter::new_unanimous(shared.clone());
+        secure_adapter.get_policy_mut().allow_all();
+        secure_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&priv1, Some(&pub1))
+            .unwrap();
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter.clone()).unwrap();
+
+        let v = json!({"a": 2}).as_object().unwrap().clone();
+        let _ = melda.create_object("y", v);
+        let blockid = melda.commit(None).unwrap().unwrap();
+
+        let adapter = melda.get_adapter();
+        let adapter = adapter.read().unwrap();
+        let adapter = adapter
+            .as_any()
+            .downcast_ref::<TrustAdapter<SharedMemoryAdapter>>()
+            .unwrap();
+        adapter.endorse(blockid.first().unwrap()).unwrap();
+
+        let blockid = blockid.first().unwrap();
+
+        let mut secure_read = TrustAdapter::new_unanimous(shared.clone());
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
+
+        let adapter_read: Box<dyn Adapter> = Box::new(secure_read);
+        let adapter_read = Arc::new(RwLock::new(adapter_read));
+        let melda_read = Melda::new(adapter_read.clone()).unwrap();
+
+        let _ = melda_read.reload();
+        assert!(!melda_read.get_all_objects().contains("y"));
+
+        let mut secure_second = TrustAdapter::new_unanimous(shared.clone());
+        secure_second.get_policy_mut().allow_all();
+        secure_second
+            .get_keystore_mut()
+            .set_endorsement_credentials(&priv2, Some(&pub2))
+            .unwrap();
+
+        let adapter_second: Box<dyn Adapter> = Box::new(secure_second);
+        let adapter_second = Arc::new(RwLock::new(adapter_second));
+        let guard2 = adapter_second.read().unwrap();
+        let secure_second_ref = guard2
+            .as_any()
+            .downcast_ref::<TrustAdapter<SharedMemoryAdapter>>()
+            .unwrap();
+
+        assert!(secure_second_ref.endorse(blockid).is_ok());
+
+        let mut secure_third = TrustAdapter::new_unanimous(shared.clone());
+        secure_third.get_policy_mut().allow_all();
+        secure_third
+            .get_keystore_mut()
+            .set_endorsement_credentials(&priv3, Some(&pub3))
+            .unwrap();
+
+        let adapter_third: Box<dyn Adapter> = Box::new(secure_third);
+        let adapter_third = Arc::new(RwLock::new(adapter_third));
+        let guard3 = adapter_third.read().unwrap();
+        let secure_third_ref = guard3
+            .as_any()
+            .downcast_ref::<TrustAdapter<SharedMemoryAdapter>>()
+            .unwrap();
+
+        assert!(secure_third_ref.endorse(blockid).is_ok());
+
+        let mut secure_read2 = TrustAdapter::new_unanimous(shared.clone());
+        secure_read2.get_policy_mut().allow_all();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read2
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
+
+        let adapter_read2: Box<dyn Adapter> = Box::new(secure_read2);
+
+        let adapter_read2 = Arc::new(RwLock::new(adapter_read2));
+        let melda_read2 = Melda::new(adapter_read2.clone()).unwrap();
+
+        let _ = melda_read2.reload();
+        assert!(melda_read2.get_all_objects().contains("y"));
+    }
+
+    #[test]
+    fn test_unanimous_endorsement_not_enough() {
+        let (priv1, pub1) = gen_keys();
+        let (_priv2, pub2) = gen_keys();
+        let (_priv3, pub3) = gen_keys();
+        let shared = SharedMemoryAdapter::new();
+
+        let mut secure_adapter = TrustAdapter::new_unanimous(shared.clone());
+        secure_adapter
+            .get_keystore_mut()
+            .set_endorsement_credentials(&priv1, Some(&pub1))
+            .unwrap();
+        secure_adapter.get_policy_mut().allow_all();
+
+        let adapter: Box<dyn Adapter> = Box::new(secure_adapter);
+        let adapter = Arc::new(RwLock::new(adapter));
+        let melda = Melda::new(adapter.clone()).unwrap();
+
+        let v = json!({"a": 2}).as_object().unwrap().clone();
+        let _ = melda.create_object("y", v);
+        let blockid = melda.commit(None).unwrap().unwrap();
+        let _ = blockid.first().unwrap();
+
+        let mut secure_read = TrustAdapter::new_unanimous(shared.clone());
+        secure_read.get_policy_mut().allow_all();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub1)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub2)
+            .unwrap();
+        secure_read
+            .get_keystore_mut()
+            .add_trusted_public_key(&pub3)
+            .unwrap();
+
+        let adapter_read: Box<dyn Adapter> = Box::new(secure_read);
+        let adapter_read = Arc::new(RwLock::new(adapter_read));
+        let melda_read = Melda::new(adapter_read.clone()).unwrap();
+
+        let _ = melda_read.reload();
+        assert!(!melda_read.get_all_objects().contains("y"));
+
+        let mut secure_read2 = TrustAdapter::new_unanimous(shared.clone());
         secure_read2.get_policy_mut().allow_all();
         secure_read2
             .get_keystore_mut()

@@ -1,6 +1,6 @@
 [package]
 name = "melda-sec"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "A pluggable security layer for Melda providing encryption, signed delta verification (with multisig support), role-based access control and policy enforcement on object-level changes"
 license = "GPL-3.0"
