@@ -295,7 +295,7 @@ The example therefore demonstrates endorsement-based validation, trust evolution
 
 ## 2026
 
-Amos Brocco, **A Dual-CRDT Architecture for Decentralized Trust Governance and Evolution**, arxiv
+Amos Brocco, **A Dual-CRDT Architecture for Decentralized Trust Governance and Evolution**, https://arxiv.org/abs/2607.06068
 
 Amos Brocco, **Decoupling Trust in Byzantine CRDTs: Fine-grained Post-Compromise Handling without Breaking Causality**, https://arxiv.org/abs/2606.31759
 
